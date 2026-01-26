@@ -1,0 +1,8 @@
+## Interface: 120000
+## Title: Attendance Exporter
+## Notes: Export raid attendance to CSV via slash commands (/attendance copy or /att copy)
+## Author: YourName
+## Version: 1.0.0
+## SavedVariables: AttendanceExporterDB
+
+AttendanceExporter.lua
