@@ -205,7 +205,7 @@ local function WriteAttendanceToCSV(attendance)
     local fileName = "Attendance_" .. dateTimeStr .. ".csv"
     
     -- Create CSV content
-    local csvContent = "Character Name,Server\n"
+    local csvContent = ""
     
     for _, member in ipairs(attendance) do
         -- Escape commas in names/servers by wrapping in quotes if needed
