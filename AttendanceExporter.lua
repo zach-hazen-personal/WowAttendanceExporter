@@ -34,7 +34,7 @@ local function GetRaidAttendance()
         return nil, "No raid members found."
     end
     
-    -- Try using UnitName API first (more reliable in WoW 12.0)
+    -- Try using UnitName API first (more reliable in modern clients)
     for i = 1, numRaidMembers do
         local unitID = "raid" .. i
         local name, realm = nil, nil
