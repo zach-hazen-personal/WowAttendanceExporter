@@ -2,7 +2,7 @@
 ## Title: Attendance Exporter
 ## Notes: Export raid attendance to CSV via slash commands (/attendance copy or /att copy)
 ## Author: YourName
-## Version: 1.1.0
+## Version: 1.1.1
 ## X-Curse-Project-ID: 1487319
 ## SavedVariables: AttendanceExporterDB
 
