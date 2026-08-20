@@ -3,6 +3,41 @@
 
 local addonName = "AttendanceExporter"
 local frame = CreateFrame("Frame")
+local selectedAttendanceOption = "onTime"
+
+local commandDefaults = {
+    enabled = false,
+    template = "$add-attendance {date} {time}",
+    onTime = "6:45 pm",
+    lateTime = "7 pm"
+}
+
+local function GetCommandSetting(key)
+    if AttendanceExporterDB and AttendanceExporterDB.commandSettings
+        and AttendanceExporterDB.commandSettings[key] ~= nil then
+        return AttendanceExporterDB.commandSettings[key]
+    end
+    return commandDefaults[key]
+end
+
+-- Build the bot command, replacing supported placeholders in the saved template.
+local function GetAttendanceCommand(attendanceOption)
+    local today = date("*t")
+    local dateStr = today.month .. "/" .. today.day .. "/" .. today.year
+    local attendanceTime = GetCommandSetting(attendanceOption)
+    local command = GetCommandSetting("template")
+    command = command:gsub("{date}", function() return dateStr end)
+    command = command:gsub("{time}", function() return attendanceTime end)
+    return command
+end
+
+local function BuildPasteText(csvText, attendanceOption)
+    if GetCommandSetting("enabled") == true then
+        return GetAttendanceCommand(attendanceOption) .. "\n" .. csvText
+    end
+
+    return csvText
+end
 
 -- Function to get current date/time string for filename
 local function GetDateTimeString()
@@ -105,7 +140,9 @@ end
 
 -- Function to copy text to clipboard using EditBox workaround
 local clipboardFrame = nil
-local function CopyToClipboard(text)
+local function CopyToClipboard(csvText)
+    local text = BuildPasteText(csvText, selectedAttendanceOption)
+    local addCommandsEnabled = GetCommandSetting("enabled") == true
     if not text or text == "" then
         return false
     end
@@ -117,7 +154,7 @@ local function CopyToClipboard(text)
     end
     
     -- Create a visible EditBox window for copying
-    clipboardFrame = CreateFrame("Frame", "AttendanceExporterClipboardFrame", UIParent, "BasicFrameTemplateWithInset")
+    clipboardFrame = CreateFrame("Frame", nil, UIParent, "BasicFrameTemplateWithInset")
     clipboardFrame:SetSize(600, 400)
     clipboardFrame:SetPoint("CENTER", UIParent, "CENTER", 0, 0)
     clipboardFrame:SetMovable(true)
@@ -131,10 +168,16 @@ local function CopyToClipboard(text)
     title:SetPoint("TOP", clipboardFrame, "TOP", 0, -10)
     title:SetText("Attendance Data - Press Ctrl+C to Copy")
     
-    -- EditBox for the CSV data (read-only)
-    local editBox = CreateFrame("EditBox", "AttendanceExporterClipboardEditBox", clipboardFrame, "InputBoxTemplate")
-    editBox:SetSize(580, 350)
-    editBox:SetPoint("TOP", clipboardFrame, "TOP", 0, -35)
+    -- Time selection for the attendance bot command.
+    local timeLabel = clipboardFrame:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+    timeLabel:SetPoint("TOPLEFT", clipboardFrame, "TOPLEFT", 18, -36)
+    timeLabel:SetText("Attendance:")
+    timeLabel:SetShown(addCommandsEnabled)
+
+    -- EditBox for the command and CSV data (read-only)
+    local editBox = CreateFrame("EditBox", nil, clipboardFrame, "InputBoxTemplate")
+    editBox:SetSize(580, addCommandsEnabled and 315 or 350)
+    editBox:SetPoint("TOP", clipboardFrame, "TOP", 0, addCommandsEnabled and -70 or -35)
     editBox:SetMultiLine(true)
     editBox:SetFontObject(ChatFontNormal)
     editBox:SetText(text)
@@ -144,6 +187,47 @@ local function CopyToClipboard(text)
     
     -- Store original text
     editBox.originalText = text
+
+    local timeButtons = {}
+    local function SetSelectedTime(attendanceOption)
+        selectedAttendanceOption = attendanceOption
+        for option, button in pairs(timeButtons) do
+            button:SetChecked(option == attendanceOption)
+        end
+
+        local updatedText = BuildPasteText(csvText, selectedAttendanceOption)
+        editBox.originalText = updatedText
+        _AttendanceExporterLastPaste = updatedText
+        editBox:SetText(updatedText)
+        editBox:SetFocus()
+        editBox:HighlightText()
+    end
+
+    local function CreateTimeButton(attendanceOption, labelText, anchor, offsetX)
+        local button = CreateFrame("CheckButton", nil, clipboardFrame, "UIRadioButtonTemplate")
+        button:SetPoint("LEFT", anchor, "RIGHT", offsetX, 0)
+        button:SetChecked(attendanceOption == selectedAttendanceOption)
+        button:SetScript("OnClick", function()
+            SetSelectedTime(attendanceOption)
+        end)
+
+        if button.Text then
+            button.Text:SetText(labelText)
+        else
+            local label = button:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+            label:SetPoint("LEFT", button, "RIGHT", 2, 0)
+            label:SetText(labelText)
+        end
+
+        timeButtons[attendanceOption] = button
+        button:SetShown(addCommandsEnabled)
+        return button
+    end
+
+    local onTimeLabel = "On Time (" .. GetCommandSetting("onTime") .. ")"
+    local lateLabel = "Late (" .. GetCommandSetting("lateTime") .. ")"
+    local earlyButton = CreateTimeButton("onTime", onTimeLabel, timeLabel, 8)
+    CreateTimeButton("lateTime", lateLabel, earlyButton, 140)
     
     editBox:SetScript("OnEscapePressed", function(self)
         clipboardFrame:Hide()
@@ -175,8 +259,8 @@ local function CopyToClipboard(text)
     end)
     
     -- ScrollFrame for the EditBox
-    local scrollFrame = CreateFrame("ScrollFrame", "AttendanceExporterClipboardScrollFrame", clipboardFrame, "UIPanelScrollFrameTemplate")
-    scrollFrame:SetPoint("TOP", clipboardFrame, "TOP", 0, -35)
+    local scrollFrame = CreateFrame("ScrollFrame", nil, clipboardFrame, "UIPanelScrollFrameTemplate")
+    scrollFrame:SetPoint("TOP", clipboardFrame, "TOP", 0, addCommandsEnabled and -70 or -35)
     scrollFrame:SetPoint("BOTTOM", clipboardFrame, "BOTTOM", 0, 10)
     scrollFrame:SetPoint("LEFT", clipboardFrame, "LEFT", 10, 0)
     scrollFrame:SetPoint("RIGHT", clipboardFrame, "RIGHT", -30, 0)
@@ -192,6 +276,115 @@ local function CopyToClipboard(text)
     end)
     
     return true
+end
+
+local commandBuilderFrame = nil
+local function ShowCommandBuilder()
+    if not AttendanceExporterDB then
+        AttendanceExporterDB = {}
+    end
+
+    if not commandBuilderFrame then
+        commandBuilderFrame = CreateFrame("Frame", "AttendanceExporterCommandBuilderFrame", UIParent, "BasicFrameTemplateWithInset")
+        commandBuilderFrame:SetSize(520, 285)
+        commandBuilderFrame:SetPoint("CENTER")
+        commandBuilderFrame:SetMovable(true)
+        commandBuilderFrame:EnableMouse(true)
+        commandBuilderFrame:RegisterForDrag("LeftButton")
+        commandBuilderFrame:SetScript("OnDragStart", commandBuilderFrame.StartMoving)
+        commandBuilderFrame:SetScript("OnDragStop", commandBuilderFrame.StopMovingOrSizing)
+
+        local title = commandBuilderFrame:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+        title:SetPoint("TOP", 0, -10)
+        title:SetText("Attendance Bot Command Builder")
+
+        local enabled = CreateFrame("CheckButton", nil, commandBuilderFrame, "UICheckButtonTemplate")
+        enabled:SetPoint("TOPLEFT", 18, -38)
+        if enabled.Text then
+            enabled.Text:SetText("Include bot command in attendance output")
+        end
+        commandBuilderFrame.enabled = enabled
+
+        local templateLabel = commandBuilderFrame:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+        templateLabel:SetPoint("TOPLEFT", 22, -78)
+        templateLabel:SetText("Command string")
+
+        local templateBox = CreateFrame("EditBox", nil, commandBuilderFrame, "InputBoxTemplate")
+        templateBox:SetSize(470, 28)
+        templateBox:SetPoint("TOPLEFT", 22, -96)
+        templateBox:SetAutoFocus(false)
+        templateBox:SetScript("OnEscapePressed", templateBox.ClearFocus)
+        commandBuilderFrame.templateBox = templateBox
+
+        local addDateButton = CreateFrame("Button", nil, commandBuilderFrame, "UIPanelButtonTemplate")
+        addDateButton:SetSize(92, 22)
+        addDateButton:SetPoint("TOPRIGHT", -120, -70)
+        addDateButton:SetText("Add {date}")
+        addDateButton:SetScript("OnClick", function()
+            templateBox:Insert("{date}")
+            templateBox:SetFocus()
+        end)
+
+        local addTimeButton = CreateFrame("Button", nil, commandBuilderFrame, "UIPanelButtonTemplate")
+        addTimeButton:SetSize(92, 22)
+        addTimeButton:SetPoint("LEFT", addDateButton, "RIGHT", 6, 0)
+        addTimeButton:SetText("Add {time}")
+        addTimeButton:SetScript("OnClick", function()
+            templateBox:Insert("{time}")
+            templateBox:SetFocus()
+        end)
+
+        local placeholderHelp = commandBuilderFrame:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+        placeholderHelp:SetPoint("TOPLEFT", 22, -126)
+        placeholderHelp:SetText("Placeholders: {date} = today's date, {time} = selected attendance time")
+
+        local onTimeLabel = commandBuilderFrame:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+        onTimeLabel:SetPoint("TOPLEFT", 22, -158)
+        onTimeLabel:SetText("On Time")
+
+        local onTimeBox = CreateFrame("EditBox", nil, commandBuilderFrame, "InputBoxTemplate")
+        onTimeBox:SetSize(190, 28)
+        onTimeBox:SetPoint("TOPLEFT", 22, -177)
+        onTimeBox:SetAutoFocus(false)
+        onTimeBox:SetScript("OnEscapePressed", onTimeBox.ClearFocus)
+        commandBuilderFrame.onTimeBox = onTimeBox
+
+        local lateLabel = commandBuilderFrame:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+        lateLabel:SetPoint("TOPLEFT", 278, -158)
+        lateLabel:SetText("Late")
+
+        local lateTimeBox = CreateFrame("EditBox", nil, commandBuilderFrame, "InputBoxTemplate")
+        lateTimeBox:SetSize(190, 28)
+        lateTimeBox:SetPoint("TOPLEFT", 278, -177)
+        lateTimeBox:SetAutoFocus(false)
+        lateTimeBox:SetScript("OnEscapePressed", lateTimeBox.ClearFocus)
+        commandBuilderFrame.lateTimeBox = lateTimeBox
+
+        local saveButton = CreateFrame("Button", nil, commandBuilderFrame, "UIPanelButtonTemplate")
+        saveButton:SetSize(110, 26)
+        saveButton:SetPoint("BOTTOM", 0, 18)
+        saveButton:SetText("Save")
+        saveButton:SetScript("OnClick", function()
+            local template = commandBuilderFrame.templateBox:GetText():match("^%s*(.-)%s*$")
+            local onTime = commandBuilderFrame.onTimeBox:GetText():match("^%s*(.-)%s*$")
+            local lateTime = commandBuilderFrame.lateTimeBox:GetText():match("^%s*(.-)%s*$")
+
+            AttendanceExporterDB.commandSettings = {
+                enabled = commandBuilderFrame.enabled:GetChecked() == true,
+                template = template ~= "" and template or commandDefaults.template,
+                onTime = onTime ~= "" and onTime or commandDefaults.onTime,
+                lateTime = lateTime ~= "" and lateTime or commandDefaults.lateTime
+            }
+            commandBuilderFrame:Hide()
+            print("|cFF00FF00Attendance Exporter:|r Bot command settings saved.")
+        end)
+    end
+
+    commandBuilderFrame.enabled:SetChecked(GetCommandSetting("enabled") == true)
+    commandBuilderFrame.templateBox:SetText(GetCommandSetting("template"))
+    commandBuilderFrame.onTimeBox:SetText(GetCommandSetting("onTime"))
+    commandBuilderFrame.lateTimeBox:SetText(GetCommandSetting("lateTime"))
+    commandBuilderFrame:Show()
 end
 
 -- Function to save attendance to CSV format in memory
@@ -210,7 +403,7 @@ local function WriteAttendanceToCSV(attendance)
     for _, member in ipairs(attendance) do
         -- Escape commas in names/servers by wrapping in quotes if needed
         local name = member.name:gsub('"', '""')  -- Escape quotes
-        local server = member.server:gsub('"', '""')
+        local server = member.server:gsub("%s+", ""):gsub('"', '""')
         
         -- Wrap in quotes if contains comma
         if name:find(",") then
@@ -228,8 +421,10 @@ local function WriteAttendanceToCSV(attendance)
         AttendanceExporterDB = {}
     end
     
-    -- Replace the entire table with just the latest entry
+    -- Preserve configuration while replacing the latest attendance entry.
+    local commandSettings = AttendanceExporterDB.commandSettings
     AttendanceExporterDB = {
+        commandSettings = commandSettings,
         timestamp = dateTimeStr,
         fileName = fileName,
         csvContent = csvContent,
@@ -238,6 +433,7 @@ local function WriteAttendanceToCSV(attendance)
     
     -- Store in global variable for manual copy via slash command
     _AttendanceExporterLastCSV = csvContent
+    _AttendanceExporterLastPaste = BuildPasteText(csvContent, selectedAttendanceOption)
     
     -- Copy to clipboard
     CopyToClipboard(csvContent)
@@ -346,15 +542,19 @@ SlashCmdList["ATTENDANCEEXPORTER"] = function(msg)
             print("|cFFFFFF00Raid Members:|r " .. GetNumGroupMembers())
         end
         print("|cFFFFFF00Last CSV Stored:|r " .. tostring(_AttendanceExporterLastCSV ~= nil))
+        print("|cFFFFFF00Add Bot Commands:|r " .. tostring(GetCommandSetting("enabled") == true))
         if AttendanceExporterDB and AttendanceExporterDB.csvContent then
             print("|cFFFFFF00Saved Record:|r Yes (timestamp: " .. (AttendanceExporterDB.timestamp or "unknown") .. ")")
         else
             print("|cFFFFFF00Saved Record:|r No (DB not initialized or empty)")
         end
         print("|cFFFFFF00=== END DEBUG ===")
+    elseif msg == "addcommands" then
+        ShowCommandBuilder()
     else
         print("|cFFFFFF00Attendance Exporter Commands:|r")
         print("  |cFF00FF00/attendance copy|r or |cFF00FF00/att copy|r - Gather attendance and copy to clipboard")
+        print("  |cFF00FF00/attendance addcommands|r or |cFF00FF00/att addcommands|r - Configure bot command output")
         print("  |cFF00FF00/attendance test|r or |cFF00FF00/att test|r - Test raid member detection")
         print("  |cFF00FF00/attendance debug|r or |cFF00FF00/att debug|r - Show debug information")
     end
